@@ -4,7 +4,7 @@
 
 import numpy as np
 
-from ._hershman import hershman_blink_detection
+from ._hershman import based_noise_blinks_detection
 from ..._fiff.constants import FIFF
 from ...annotations import _annotations_starts_stops
 from ...io import BaseRaw
@@ -15,6 +15,7 @@ def find_blinks_by_slope(raw, concat, concat_gap_interval=100, description="BAD_
     """Find blinks based on the slope of the pupil size.
     
     For more information, see :footcite:`HershmanEtAl2018`.
+    
     Notes
     -----
     .. versionadded:: 1.9
