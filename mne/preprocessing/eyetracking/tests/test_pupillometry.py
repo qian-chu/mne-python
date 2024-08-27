@@ -4,16 +4,75 @@
 
 import numpy as np
 import pytest
+from contextlib import nullcontext
 
 from mne import create_info
 from mne.annotations import _annotations_starts_stops
 from mne.datasets.testing import data_path, requires_testing_data
 from mne.io import RawArray, read_raw_eyelink
 from mne.preprocessing.eyetracking import interpolate_blinks
+from mne.preprocessing.eyetracking._pupillometry import _find_dropout, find_blinks
 
 fname = data_path(download=False) / "eyetrack" / "test_eyelink.asc"
 pytest.importorskip("pandas")
 
+
+@requires_testing_data
+@pytest.mark.parametrize(
+    "dropout_value, sfreq, expectation",
+    [
+        ('NotNumerical', None, pytest.raises(AssertionError, match=r'dropout_value must be either NaN or a numerical value \(int or float\)')),
+        (0, 'NotNumerical', pytest.raises(AssertionError, match=r"sfreq must be numerical")),
+        (0, None, nullcontext()),
+        (np.nan, None, nullcontext()),
+    ],
+)
+def test_find_dropout(dropout_value, sfreq, expectation):
+    """Test find dropout of data based on specified value."""
+    raw = read_raw_eyelink(fname, create_annotations=["blinks"], find_overlaps=True)
+    if sfreq is None:
+        sfreq = raw.info['sfreq']
+    with expectation:   
+        onset, duration, n_blinks = _find_dropout(np.squeeze(raw.copy().get_data(picks='pupil_left')), dropout_value, sfreq)
+        print(n_blinks)
+
+@requires_testing_data
+@pytest.mark.parametrize(
+    "method, per_eye, dropout_value, description, expectation",
+    [   
+        (
+            'NotSupported', 
+            True, 
+            0, 
+            "BAD_blink", 
+            pytest.raises(
+                ValueError,
+                match=r"Invalid value for the 'method' parameter. Allowed values are "
+                r"'by_dropout' and 'by_slope', but got .* instead.",
+            ),
+        ),
+        (
+            'by_dropout', 
+            True, 
+            'NotSupported', 
+            "BAD_blink", 
+            pytest.raises(
+                AssertionError, 
+                match=r'dropout_value must be either NaN or a numerical value \(int or float\)'
+            )
+        ),
+        ('by_dropout', True, np.nan, "BAD_blink", nullcontext()),
+        ('by_dropout', True, 0, "BAD_blink", nullcontext()),
+        ('by_dropout', True, 0, "BAD_blink", nullcontext()),
+        ('by_dropout', False, 0, "BAD_blink", nullcontext()),
+    ],
+)
+def test_find_blinks(method, per_eye, dropout_value, description, expectation):
+    """Test find_blinks based on a specified method."""
+    raw = read_raw_eyelink(fname, create_annotations=["blinks"], find_overlaps=True)
+    with expectation:   
+        raw = find_blinks(raw, method=method, per_eye=per_eye, dropout_value=dropout_value, 
+                          description=description)
 
 @requires_testing_data
 @pytest.mark.parametrize(
