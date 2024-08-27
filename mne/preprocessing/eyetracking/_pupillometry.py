@@ -3,15 +3,48 @@
 # Copyright the MNE-Python contributors.
 
 import numpy as np
+import re
 
 from ._hershman import based_noise_blinks_detection
 from ..._fiff.constants import FIFF
 from ...annotations import _annotations_starts_stops
 from ...io import BaseRaw
-from ...utils import _check_preload, _validate_type, logger, warn
+from ...utils import _check_preload, _validate_type, logger, warn, _check_option
+
+_KNOWN_FIND_BLINKS_METHODS = ("by_dropout", "by_slope")
 
 
-def find_blinks_by_slope(raw, concat, concat_gap_interval=100, description="BAD_blink"):
+def _find_dropout(data, dropout_value, sfreq):
+    assert isinstance(dropout_value, (int, float)) or (isinstance(dropout_value, float) and np.isnan(dropout_value)), \
+        "dropout_value must be either NaN or a numerical value (int or float)"
+    assert isinstance(sfreq, (int, float)), \
+        "sfreq must be numerical"
+    assert np.shape(data)
+    if np.isnan(dropout_value):
+        dropouts_inds = np.isnan(data)
+    else:
+        dropouts_inds = (data == dropout_value)
+
+    diff = np.diff(dropouts_inds.astype(int))  # Missing data onset == 1, offset == -1
+    onsets = np.where(diff == 1)[0] + 1  # Blinks onset
+    ends = np.where(diff == -1)[0] + 1  # Blinks offset
+    # Handle case where the dropout starts from the first element
+    if dropouts_inds[0]:
+        onsets = np.insert(onsets, 0, 0)
+    # Handle case where the dropout ends at the last element
+    if dropouts_inds[-1]:
+        ends = np.append(ends, len(data))
+    durations = ends - onsets
+
+    # Convert onsets and durations to seconds
+    onsets = onsets / sfreq
+    durations = durations / sfreq
+
+    return onsets, durations, len(onsets)
+
+
+def find_blinks(raw, method='by_dropout', per_eye=False, dropout_value=0, concat_gap_interval=100,
+                description="BAD_blink"):
     """Find blinks based on the slope of the pupil size.
     
     For more information, see :footcite:`HershmanEtAl2018`.
@@ -20,7 +53,24 @@ def find_blinks_by_slope(raw, concat, concat_gap_interval=100, description="BAD_
     -----
     .. versionadded:: 1.9
     """
-    pass
+
+    # Extract recorded:
+    pupils_record = [ch for ch in raw.ch_names if re.search(r"pupil_", ch)]
+    assert len(pupils_record) > 0, "No pupil_ channel found in raw"
+
+    for pupil in pupils_record:
+        # Check method:
+        _check_option("method", method, _KNOWN_FIND_BLINKS_METHODS)
+        if method == "by_dropout":
+            onset, duration, n_blinks = _find_dropout(np.squeeze(raw.copy().get_data(picks=pupil)), dropout_value,
+                                                      raw.info['sfreq'])
+        else:
+            raise Exception('Only by_dropout supported so far')
+        # Add the annotations:
+        raw.annotations.append(onset, duration, [description] * n_blinks,
+                               ch_names=[[pupil]] * n_blinks if per_eye else None)
+
+    return raw
 
 
 def interpolate_blinks(raw, buffer=0.05, match="BAD_blink", interpolate_gaze=False):
